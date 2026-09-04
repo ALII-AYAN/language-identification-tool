@@ -1,0 +1,27 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Project artefacts (regenerable) ----
+models/*.joblib
+outputs/
+*.log
+
+# ---- Datasets: too large / usually private, keep only the placeholder ----
+data/*
+!data/README.md
+
+# ---- Notebooks ----
+.ipynb_checkpoints/
