@@ -1,427 +1,274 @@
-# Language Identifier — English / Urdu / Chinese
+# Language Identification
 
-A language identification system that tells English, Urdu and Chinese apart from a
-single paragraph of text, using **character n-grams (1–4)** and a
-**Multinomial Naive Bayes** classifier wrapped in one scikit-learn `Pipeline`.
+Identify whether a piece of text is **English**, **Urdu** or **Chinese** using
+character n-grams and a Multinomial Naive Bayes classifier.
 
-I trained it on the **WiLI-2018** benchmark (Wikipedia Language Identification,
-235 languages / 235,000 paragraphs), filtered down to the three languages I cared
-about. On the official WiLI test split it reaches **99.35% accuracy** and a
-**99.35% macro F1**, and the whole thing trains in about 20 seconds on a laptop CPU.
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-1.3%2B-orange)
+![accuracy](https://img.shields.io/badge/accuracy-99.3%25-brightgreen)
+![tests](https://img.shields.io/badge/tests-7%20passing-brightgreen)
+![license](https://img.shields.io/badge/license-MIT-green)
 
 ```
-WiLI-2018 text ──> normalise ──> char n-grams 1-4 ──> MultinomialNB ──> language + probabilities
-                   (in-pipeline)   (CountVectorizer)      (α=0.1)
+$ python -m src.predict "یہ ایک کتاب ہے"
+Text      : یہ ایک کتاب ہے
+Language  : urdu
+  urdu     0.9998
+  english  0.0002
+  chinese  0.0000
 ```
 
-It ships with a **command-line interface**, a **Tkinter GUI** that shows the
-probability bars and the exact n-grams behind each decision, four evaluation
-charts, and a test suite.
+## The idea
 
----
+Language identification looks like it needs dictionaries, stop-word lists and
+tokenizers per language. It mostly doesn't. This project only asks one question:
+**which characters tend to follow which?**
 
-## Why character n-grams
+Feed a classifier the character 1-to-4-grams of a sentence and the script gives
+the answer away. Latin script means English, the Arabic-derived Perso-Arabic
+script means Urdu, and logographic CJK means Chinese. No tokenizer, no
+language-specific rules, and it still behaves sensibly on short or messy input
+because it never depends on recognizing a real word.
 
-Language identity lives in orthography, not vocabulary. A paragraph can be about
-football or fiscal policy — what stays constant is that English writes `the` and
-`ing`, Urdu writes `کا` and `ہے` in Arabic script, and Chinese uses Han characters
-with `。` as the full stop.
+## Results
 
-Character n-grams capture exactly that, and they have three properties that matter
-for this task:
+Trained on 3,000 paragraphs (1,000 per language) from the
+[Kaggle Language Identification dataset](https://www.kaggle.com/datasets/zarajamshaid/language-identification-datasst),
+stratified 85/15 split, character 1–4 grams, `alpha=0.5`:
 
-- **No tokenisation needed.** Chinese has no spaces, so a word-level model has
-  nothing to bite on. Character n-grams treat all three scripts identically.
-- **Robust to short input.** A two-word fragment still yields dozens of n-grams.
-- **Cheap.** No embeddings, no GPU, no downloads at inference time — the trained
-  model is a few megabytes of count tables.
+| Metric | Score |
+| --- | --- |
+| Hold-out accuracy | **0.9933** (447/450) |
+| 5-fold CV accuracy | **0.9903 ± 0.0047** |
+| Macro F1 | 0.9934 |
+| Weighted F1 | 0.9933 |
 
-Naive Bayes is the natural partner: it is a linear-time model that handles very
-high-dimensional sparse features (here a 300,000-term vocabulary) well, and its
-per-feature log-probabilities are directly readable, which is what makes the
-"which n-grams decided this?" panel in the GUI possible.
+| Language | Precision | Recall | F1 | Support |
+| --- | --- | --- | --- | --- |
+| chinese | 1.0000 | 1.0000 | 1.0000 | 150 |
+| english | 0.9933 | 0.9867 | 0.9900 | 150 |
+| urdu | 0.9868 | 0.9933 | 0.9900 | 150 |
+| **macro avg** | 0.9934 | 0.9933 | 0.9933 | 450 |
 
----
+Confusion matrix (rows = true, columns = predicted):
+
+```
+                predicted
+              chi   eng   urd
+true  chinese  150    0    0
+      english    0  148    2
+      urdu       0    1  149
+```
+
+Only 3 of 450 test paragraphs were wrong. All three are code-switching cases:
+two English paragraphs quoted enough Urdu words to flip, and one Urdu paragraph
+was mostly Latin-script transliteration. Dumping `outputs/misclassified.csv`
+after a run is the fastest way to see these.
+
+Most frequent character n-grams per language (straight counts, no TF-IDF):
+
+| chinese | english | urdu |
+| --- | --- | --- |
+| `的` | ` ` (space) | ` ` (space) |
+| `一` | `e` | `ا` |
+| `是` | `t` | `ر` |
+| `在` | `th` | `ک` |
+| `国` | `he` | `ی` |
+
+English and Urdu are dominated by spaces and their single most common letter,
+which is exactly why the n-gram range matters: at 1-grams alone the two would
+collide on whitespace, and the 3–4 gram features are what pull them apart.
 
 ## Features
 
-- **One scikit-learn Pipeline** — normalisation, vectorisation and classification
-  are serialised together, so a saved model can never be served text preprocessed
-  differently from its training data.
-- **Official WiLI test split** by default: train on the 175k train paragraphs,
-  evaluate on the untouched 60k test paragraphs. Falls back to a stratified
-  hold-out if you only downloaded the train files.
-- **Three interfaces**: training CLI, prediction CLI (`--text`, `--file` or stdin,
-  with `--json` output), and a Tkinter GUI.
-- **Explainable predictions** — every guess comes with the highest-margin n-grams
-  that pushed the model toward that language.
-- **Four charts** written on every training run: confusion matrix (raw and
-  normalised), per-class precision/recall/F1, class distribution, and the top
-  discriminative n-grams per language.
-- **CJK/Arabic-safe plotting** — the charts detect a CJK font and fall back to
-  `U+4E2D`-style escaping instead of drawing empty boxes.
-- **24 tests**, no dataset download required to run them.
-
----
+- **One artifact** — a scikit-learn `Pipeline` (vectorizer + classifier) saved as
+  a single `joblib` file. No separate vocabulary or config to ship alongside.
+- **Two dataset layouts** — train straight from a labelled CSV, or from three
+  separate corpus files. Column names and the Chinese column are auto-detected.
+- **Headless by default** — every chart is written to `outputs/`. Nothing calls
+  `plt.show()`, so it runs on a server and in CI.
+- **Three entry points** — CLI training, CLI prediction (single text, file, CSV
+  column, stdin, interactive) and a Tkinter desktop app.
+- **Honest numbers** — per-language deduplication, stratified split, optional
+  k-fold cross-validation, and a JSON dump of every metric.
+- **Tests that don't need your data** — the suite builds a synthetic corpus and
+  trains end to end.
 
 ## Project structure
 
 ```
-language-identifier/
-├── app/
-│   └── gui.py                  # Tkinter desktop application
+language-identification/
 ├── src/
-│   ├── data.py                 # WiLI-2018 reader (x_*.txt / y_*.txt / labels.csv)
-│   ├── features.py             # text normalisation + char n-gram vectoriser
-│   ├── models.py               # pipeline factory, save/load, probabilities, top n-grams
-│   ├── train.py                # training, evaluation, charts, metrics.json
-│   ├── predict.py              # CLI + reusable Predictor class
-│   └── utils.py                # seeding, CJK-safe plotting helpers
+│   ├── config.py      # paths + hyper-parameters, overridable by env vars
+│   ├── data.py        # loading, cleaning, dedup, dataset assembly
+│   ├── model.py       # pipeline definition + save/load
+│   ├── train.py       # training entry point
+│   ├── evaluate.py    # metrics + report charts
+│   ├── predict.py     # inference helpers + CLI
+│   └── gui.py         # Tkinter desktop app
 ├── scripts/
-│   └── download_wili.py        # fetch the dataset (Kaggle, then Zenodo mirror)
+│   └── prepare_dataset.py   # download / inspect / split the Kaggle dataset
 ├── tests/
-│   └── test_smoke.py           # 24 tests, run in ~4 s
-├── assets/                     # charts shown in this README
-├── data/wili/                  # dataset (git-ignored)
-├── models/                     # trained model + metadata (git-ignored)
-├── outputs/                    # charts and metrics.json (git-ignored)
+│   └── test_smoke.py  # end-to-end tests on synthetic data
+├── data/              # corpora go here (not committed)
+├── models/            # trained model (not committed)
+├── outputs/           # metrics, charts, error analysis (not committed)
+├── legacy/            # older scripts, kept for reference
 ├── requirements.txt
-├── .gitignore
 └── README.md
 ```
-
----
 
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/language-identifier.git
-cd language-identifier
+git clone https://github.com/<your-username>/language-identification.git
+cd language-identification
 
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Python 3.9+. The only heavy dependency is scikit-learn; there is no deep-learning
-library involved.
+Requires Python 3.10+. The only real dependencies are scikit-learn, pandas,
+numpy, joblib and matplotlib.
 
-**Tkinter** (needed for the GUI only) ships with CPython on Windows and macOS. On
-Debian/Ubuntu:
+## Dataset
 
-```bash
-sudo apt-get install python3-tk
-```
+| | |
+| --- | --- |
+| Name | Language Identification dataset |
+| Source | [kaggle.com/datasets/zarajamshaid/language-identification-datasst](https://www.kaggle.com/datasets/zarajamshaid/language-identification-datasst) |
+| Origin | WiLI-2018, the Wikipedia Language Identification benchmark |
+| Size | 22,000 rows — 22 languages × 1,000 paragraphs |
+| Used here | English, Urdu, Chinese (1,000 paragraphs each) |
 
----
-
-## Getting the data
-
-Download WiLI-2018 from Kaggle — <https://www.kaggle.com/datasets/mexwell/wili-2018>
-— and extract it into `data/wili/`:
-
-```
-data/wili/
-├── x_train.txt    # 175,000 paragraphs, one per line
-├── y_train.txt    # 175,000 ISO 639-3 codes
-├── x_test.txt     #  60,000 paragraphs
-├── y_test.txt     #  60,000 codes
-└── labels.csv     # code -> language name
-```
-
-Or let the script do it:
+Set up the Kaggle CLI and fetch it:
 
 ```bash
-python scripts/download_wili.py            # Kaggle first, then the Zenodo mirror
-python scripts/download_wili.py --source zenodo     # no login needed
+pip install kaggle
+# https://www.kaggle.com/settings -> "Create New Token" -> save as ~/.kaggle/kaggle.json
+chmod 600 ~/.kaggle/kaggle.json
+
+python scripts/prepare_dataset.py --download --out data
+python scripts/prepare_dataset.py --inspect         # per-language counts
 ```
 
-> The four `x`/`y` text files are the important ones. Each line *i* of `x_train.txt`
-> is a Wikipedia paragraph, and line *i* of `y_train.txt` is its language. Only the
-> three codes I asked for are kept, so the other 232 languages are filtered out
-> before anything is vectorised.
-
----
+No Kaggle account? Open the dataset page, hit Download, unzip, and drop
+`dataset.csv` into `data/`. The other 19 languages are filtered out
+automatically — only English, Urdu and Chinese rows are used.
 
 ## Usage
 
-### 1. Train
+### Train
 
 ```bash
-python -m src.train
+python -m src.train                          # char 1-4 grams, alpha=0.5, 15% hold-out
+python -m src.train --cv 5                   # add 5-fold cross-validation
+python -m src.train --no-plots               # metrics only, no PNGs
+python -m src.train --ngram-max 3 --alpha 0.1 --test-size 0.2
+python -m src.train --csv /path/to/dataset.csv
 ```
 
-```
-[1/5] Loading WiLI-2018 ...
-      train paragraphs: 2235 {'eng': 745, 'urd': 745, 'zho': 745}
-      evaluation     : official WiLI test split
-      train / test   : 2235 / 765
-[2/5] Vectorising + training MultinomialNB ...
-      vocabulary     : 300,000 character n-grams
-[3/5] Evaluating ...
-      accuracy       : 99.35%
-      macro F1       : 99.35%
-
-              precision    recall  f1-score   support
-
-     English       0.996      0.992      0.994       255
-        Urdu       0.992      0.992      0.992       255
-      Chinese      0.992      0.996      0.994       255
-
-    accuracy                           0.9935       765
-   macro avg       0.993      0.993      0.993       765
-weighted avg       0.993      0.993      0.993       765
-
-[4/5] Writing charts ...
-[5/5] Saving model and metrics ...
-```
-
-Everything is configurable:
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--data-dir` | `data/wili` | Folder with the `x_*.txt` / `y_*.txt` files |
-| `--languages` | `eng,urd,zho` | Comma-separated ISO 639-3 codes |
-| `--eval-split` | `auto` | `wili-test` (official split), `random`, or `auto` |
-| `--test-size` | `0.2` | Hold-out fraction in `random` mode |
-| `--ngram-min` / `--ngram-max` | `1` / `4` | Character n-gram range |
-| `--analyzer` | `char_wb` | `char_wb`, `char` or `word` |
-| `--min-df` | `2` | Drop n-grams appearing in fewer than N documents |
-| `--max-features` | `300000` | Vocabulary cap (`0` = unlimited) |
-| `--alpha` | `0.1` | MultinomialNB additive smoothing |
-| `--use-tfidf` | off | TF-IDF weights instead of raw counts |
-| `--no-lowercase` | off | Keep case |
-| `--max-per-language` | `0` | Cap paragraphs per language (`0` = all) |
-
-A few examples:
+### Predict
 
 ```bash
-python -m src.train --languages eng,urd,zho,ara,hin     # more languages
-python -m src.train --eval-split random --test-size 0.25
-python -m src.train --ngram-max 5 --alpha 0.05
-python -m src.train --max-per-language 300              # quick smoke run
+python -m src.predict "今天我们学校有中文课"       # one sentence
+python -m src.predict --file samples.txt          # one sample per line -> CSV
+python -m src.predict --csv reviews.csv --column text
+cat notes.txt | python -m src.predict --stdin
+python -m src.predict --interactive
+python -m src.gui                                 # desktop app
 ```
 
-### 2. Predict from the command line
+### Use as a library
+
+```python
+from src.predict import predict, predict_proba
+
+predict("This is a test sentence")
+# -> 'english'
+
+predict_proba("یہ ایک کتاب ہے")
+# -> {'chinese': 0.0, 'english': 0.0002, 'urdu': 0.9998}
+```
+
+## Outputs
+
+Every run writes to `outputs/`:
+
+| File | Contents |
+| --- | --- |
+| `metrics.json` | accuracy, per-class P/R/F1, CV score, hyper-parameters, top n-grams |
+| `confusion_matrix.png` | where languages get confused |
+| `metrics_per_language.png` | precision / recall / F1 per language |
+| `class_distribution.png` | training samples per language |
+| `probability_distribution.png` | how confident predictions are |
+| `top_ngrams_<lang>.png` | most frequent character n-grams |
+| `misclassified.csv` | every wrong prediction, for error analysis |
+| `final_dataset.csv` | the cleaned, merged, deduplicated dataset |
+
+## How it works
+
+```python
+CountVectorizer(analyzer="char", ngram_range=(1, 4))   # ~100k features
+    -> MultinomialNB(alpha=0.5)
+```
+
+1. **Load** the corpora, strip URLs/emails, collapse whitespace, lowercase
+   English (case is meaningless for Urdu and Chinese, so they're left alone).
+2. **Deduplicate** per language — duplicate lines would otherwise land in both
+   the train and test split and quietly inflate accuracy.
+3. **Vectorize** into character n-gram counts. Sub-linear TF is off: raw counts
+   suit a multinomial model.
+4. **Split** 85/15, stratified so each language keeps its proportions.
+5. **Fit** and evaluate, with optional k-fold cross-validation over the full set.
+
+## Tests
 
 ```bash
-python -m src.predict --text "The government announced a new transport policy."
-python -m src.predict --file article.txt
-cat article.txt | python -m src.predict
-python -m src.predict --text "..." --json
-```
-
-```
-Text      : The government announced a new transport policy.
-Language  : English (eng)
-Confidence: 99.87%
-
-  English     99.87%  ########################################
-  Urdu         0.09%
-  Chinese      0.04%
-```
-
-Add `--explain` to see which n-grams drove the decision:
-
-```
-Top n-grams supporting this decision:
-  'the'        +8.412
-  ' th'        +7.905
-  'ing'        +7.331
-  'ed '        +6.874
-  'and'        +6.512
-```
-
-### 3. Desktop GUI
-
-```bash
-python -m app.gui
-```
-
-Type or paste text, press **Detect** (or `Ctrl+Enter`), and the window shows the
-predicted language with its confidence, a bar chart of the full probability
-distribution, and the highest-margin n-grams for the winning language. The
-**Load sample** button cycles through a built-in English / Urdu / Chinese example.
-
-```
-+---------------------------------------------------------------+
-|  Language Identifier                                          |
-|  Character n-grams (1-4) + Multinomial Naive Bayes            |
-+---------------------------------------------------------------+
-|  [ Enter text:                                              ] |
-|  [                                                          ] |
-|  [ Detect language ]  [ Load sample ]  [ Clear ]              |
-+---------------------------------------------------------------+
-|  English   99.87% confidence                                  |
-+-------------------------------+-------------------------------+
-|   [bar chart: probabilities]  |  N-grams behind the decision  |
-|                               |   the    +8.41                |
-|                               |   th     +7.90                |
-|                               |   ing    +7.33                |
-+-------------------------------+-------------------------------+
-```
-
-### 4. Tests
-
-```bash
+pip install pytest
 pytest -q
 ```
 
-24 tests covering normalisation, the pipeline structure, the WiLI reader (including
-a train-only download and a missing directory), model save/load round-trip, the
-`Predictor` class, chart generation and non-Latin text escaping. They run on small
-built-in samples, so no dataset download is needed.
+Seven tests build a synthetic corpus, train the pipeline end to end and check
+accuracy, top-n-gram extraction, the prediction helpers, and the CSV column
+auto-detection. They run in about two seconds and don't touch your real data.
 
----
+## Troubleshooting
 
-## Results
-
-Trained on the WiLI-2018 **train** split (745 paragraphs per language), evaluated
-on the **official test** split (255 per language). Character n-grams 1–4 with
-`char_wb`, raw counts, `alpha=0.1`, 300,000-feature vocabulary.
-
-| Metric | Value |
+| Symptom | Fix |
 | --- | --- |
-| Accuracy | **99.35%** |
-| Macro F1 | **99.35%** |
-| Training time | ~20 s (CPU, single core) |
+| `Trained model not found at ...` | run `python -m src.train` first |
+| `No usable dataset found` | check the file names, or pass `--csv` / `--data-dir` |
+| `No Chinese column found in ...` | make sure the CSV really holds Chinese text and is UTF-8 |
+| Empty boxes in `top_ngrams_urdu.png` | install a font with Arabic coverage (e.g. Noto Nastaliq Urdu) |
+| `ModuleNotFoundError: No module named 'tkinter'` | `sudo apt install python3-tk` on Linux (bundled on Windows/macOS) |
 
-| Language | Precision | Recall | F1 | Support |
-| --- | --- | --- | --- | --- |
-| English | 99.6% | 99.2% | 99.4% | 255 |
-| Urdu | 99.2% | 99.2% | 99.2% | 255 |
-| Chinese | 99.2% | 99.6% | 99.4% | 255 |
+## Project history
 
-### Confusion matrix
+This started as a handful of ad-hoc scripts with hard-coded Windows paths and
+near-identical copies of the same training loop. It was consolidated into the
+package above. A few things worth knowing if you compare against the old
+versions:
 
-![Confusion matrix](assets/confusion_matrix.png)
+- Paths are resolved relative to the project root and can be overridden with
+  `LID_DATA_DIR`, `LID_MODEL_DIR` and `LID_OUTPUT_DIR`.
+- The top-n-gram routine used a pandas label index to slice a matrix, which
+  picked the wrong rows. It now uses a boolean mask on the sparse matrix.
+- The chart labeled "Accuracy per Language" was plotting precision. It's now a
+  grouped precision/recall/F1 chart.
+- Training refuses to run below 20 samples per language instead of producing a
+  silently broken model.
 
-Only 5 of 765 test paragraphs were misclassified. The errors are spread evenly —
-one English paragraph read as Urdu, one as Chinese, one Urdu read as English, one
-as Chinese, and one Chinese read as Urdu. No language pair dominates the errors,
-which is what you want to see on a balanced task.
+The originals are in `legacy/` for reference; delete the folder whenever you like.
 
-### Per-language metrics
+## Credits
 
-![Per-class metrics](assets/per_class_metrics.png)
-
-### What the model actually learned
-
-![Top n-grams](assets/top_ngrams.png)
-
-The n-grams with the highest log-odds margin — how much they vote for one language
-over the average of the others:
-
-| English | Urdu | Chinese |
-| --- | --- | --- |
-| `the` | `ی` | `的` |
-| ` th` | `ے` | `。` |
-| `ing` | `کا` | `和` |
-| `ed ` | `ہے` | `了` |
-| `and` | `نے` | `在` |
-| `ion` | `اور` | `学` |
-
-This is exactly the signal you would expect: English contributes Latin function
-words and suffixes, Urdu contributes Arabic-script letters and its characteristic
-postpositions (`کا` "of", `نے` the ergative marker, `اور` "and"), and Chinese
-contributes Han characters plus the full stop `。`. The three feature sets are
-almost disjoint, which is why the classifier is so confident.
-
-### Ablation
-
-I varied one setting at a time on the same splits to check the defaults were the
-right ones:
-
-| Configuration | Accuracy |
-| --- | --- |
-| **`char_wb` 1–4, counts, α=0.1** (default) | **99.35%** |
-| `char` 1–4 (no word boundaries) | 99.18% |
-| `char_wb` 1–5 | 99.33% |
-| `char_wb` 1–3 | 99.27% |
-| `char_wb` 1–4, α=1.0 | 99.21% |
-| `char_wb` 1–2 | 99.02% |
-| `char_wb` 1–4, TF-IDF | 98.86% |
-| `word` 1–2 | 93.41% |
-
-Three findings shaped the defaults:
-
-1. **`char_wb` beats `char`** (99.35% vs 99.18%). Padding each word with a space
-   gives the model explicit word-boundary markers, which helps Latin and Arabic
-   script. Chinese has no spaces, so it is unaffected either way.
-2. **Word n-grams collapse to 93.41%** — and the damage is entirely on Chinese.
-   Without spaces there is nothing for a word tokeniser to find, so Chinese
-   paragraphs degrade to a handful of very long tokens.
-3. **TF-IDF is slightly worse than raw counts** (98.86% vs 99.35%). This is the
-   expected result: Multinomial Naive Bayes is derived for raw term counts, and
-   IDF reweighting distorts the document-length-normalised counts the model
-   assumes.
-
----
-
-## Design notes
-
-**Why the normaliser lives inside the pipeline.** `FunctionTransformer(normalize_corpus)`
-is the first step of the `Pipeline`, not a preprocessing script you run first. That
-means `joblib.dump(pipeline)` serialises the text cleaning *with* the model, and
-inference code physically cannot skip or change it.
-
-**Why `alpha=0.1`.** Character n-gram vocabularies are large and sparse, so
-scikit-learn's default `alpha=1.0` over-smooths and costs about 0.14 points (99.21%
-vs 99.35%).
-
-**Why `char_wb`, not `char`.** See the ablation above — word boundaries help the
-two space-delimited scripts and cost nothing on Chinese.
-
-**Why the charts escape non-Latin glyphs.** Matplotlib has no bidirectional text
-engine or Arabic contextual shaping, so Urdu letters would be drawn isolated and
-unjoined — worse than useless. `src/utils.py` detects a CJK font for Han
-characters and renders everything else as `U+XXXX` code points rather than empty
-boxes.
-
-**Why `errors="replace"` when reading WiLI.** A single malformed byte in a
-175,000-line file would otherwise abort the whole run. One damaged paragraph is
-not worth losing the dataset over.
-
----
-
-## Limitations
-
-- **Paragraph-length input.** WiLI paragraphs are at least 140 Unicode code
-  points. Accuracy on single words or short phrases will be lower; the model has
-  never seen such short documents.
-- **Formal register.** WiLI is Wikipedia text. Social-media transliteration
-  (Romanised Urdu — "Urdu written in English letters") is out of distribution and
-  will often be classified as English.
-- **Three languages only.** The model cannot say "none of the above" — it always
-  picks one of the languages it was trained on, however confident. Retrain with
-  `--languages` to extend it.
-- **`zho` is a macrolanguage.** WiLI's `zho` covers Chinese varieties written in
-  Han characters; this is a script-level classifier, not a Mandarin/Cantonese
-  discriminator.
-
----
-
-## Dataset & citation
-
-WiLI-2018 — <https://www.kaggle.com/datasets/mexwell/wili-2018>, published under
-CC BY 4.0 / ODbL.
-
-```bibtex
-@dataset{thoma_martin_2018_841984,
-  author    = {Thoma, Martin},
-  title     = {{WiLI-2018 - Wikipedia Language Identification database}},
-  month     = jan,
-  year      = 2018,
-  publisher = {Zenodo},
-  version   = {1.0.0},
-  doi       = {10.5281/zenodo.841984}
-}
-```
+Dataset: [Language Identification dataset](https://www.kaggle.com/datasets/zarajamshaid/language-identification-datasst)
+by Zara Jamshaid, an excerpt of WiLI-2018 — *Thoma, M. (2018). The WiLI
+benchmark dataset for written language identification*, arXiv:1801.07779.
 
 ## License
 
-[MIT](LICENSE) — free to use, modify and distribute with attribution.
+Code is MIT — see [LICENSE](LICENSE). The dataset carries its own licence;
+check the Kaggle page before redistributing it.
